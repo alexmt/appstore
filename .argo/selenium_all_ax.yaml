@@ -1,0 +1,131 @@
+---
+type: workflow
+name: selenium-example-workflow
+version: "1"
+inputs:
+  parameters:
+    COMMIT:
+      default: "%%session.commit%%"
+    REPO:
+      default: "%%session.repo%%"
+    browser:
+      default: chrome
+    test_failure:
+      default: "false"
+steps:
+- checkout:
+    template: "argo-checkout"
+- test_with_video:
+    template: selenium-test-video-workflow
+    arguments:
+      parameters.code: "%%steps.checkout.code%%"
+
+---
+type: workflow
+name: selenium-test-video-workflow
+version: "1"
+inputs:
+  parameters:
+    code:
+    browser:
+    test_failure:
+steps:
+- test:
+    template: selenium-test-workflow
+- convert:
+    template: axvideo-converter
+    # flags:
+    #   always_run: true
+    arguments:
+      parameters.video_input: "%%steps.test.outputs.artifacts.video%%"
+
+---
+type: workflow
+name: selenium-test-workflow
+version: "1"
+inputs:
+  artifacts:
+    code:
+      path: "/src"
+  parameters:
+    browser:
+    test_failure:
+fixtures:
+- selenium:
+    template: "selenium-server"
+- app:
+    template: selenium-test-app
+- vnc_recorder:
+    template: vnc-recorder
+    arguments:
+      parameters.remote: "%%fixtures.selenium.ip%%"
+      parameters.output: "/tmp/video.flv"
+steps:
+- e2e_test:
+    template: selenium_e2e_test
+    arguments:
+      parameters.selenium_ip: "%%fixtures.selenium.ip%%"
+      parameters.app_ip:  "%%fixtures.app.ip%%"
+outputs:
+  artifacts:
+    video:
+      from: "%%fixtures.vnc_recorder.outputs.artifact.video%%"
+
+---
+type: container
+name: selenium_e2e_test
+version: "1"
+inputs:
+  artifacts:
+    code:
+      path: "/src"
+  parameters:
+    selenium_ip:
+    app_ip:
+    browser:
+    test_failure:
+resources:
+  mem_mib: 2048
+  cpu_cores: 0.4
+image: python:3.5.2
+env:
+  - name: APP_URL
+    value: http://%%inputs.parameters.app_ip%%:8000/index.html
+  - name: TEST_FAILURE
+    value: "%%inputs.parameters.test_failure%%"
+command: ["sh", "-c"]
+args: ["pip3 install -r /src/selenium/tests/requirements.txt && mkdir -p /tmp/report && pytest --html=/tmp/report/index.html -vv /src/selenium/tests/test.py --remote %%inputs.parameters.selenium_ip%% --browser %%inputs.parameters.browser%% --capture=no"]
+outputs:
+  artifacts:
+    report:
+      path: "/tmp/report"
+      meta_data:
+      - browsable
+
+---
+type: container
+name: selenium-test-app
+version: "1"
+inputs:
+  artifacts:
+    code:
+      path: "/src"
+resources:
+  mem_mib: 1024
+  cpu_cores: 0.1
+image: python:3.5.2
+command: ["sh", "-c"]
+args: ["cd /src/selenium/app && python -m http.server 8000"]
+
+---
+type: container
+name: selenium-server
+version: "1"
+description: Base selenium container for selenium firefox and chrome
+inputs:
+  parameters:
+    browser:
+resources:
+  mem_mib: 1024
+  cpu_cores: 0.1
+image: "selenium/standalone-%%inputs.parameters.browser%%-debug:latest"
